@@ -3,12 +3,27 @@ from discord.ext import commands
 import os
 import base64
 import keep_alive
-from replit import db
 import json
 
-client = commands.Bot(command_prefix=commands.when_mentioned_or(("!mermaid-")))
+# Set up intents
+intents = discord.Intents.default()
+intents.message_content = True  # Enable message content intent
+
+client = commands.Bot(command_prefix=commands.when_mentioned_or(("!mermaid-")), intents=intents)
 
 client.remove_command('help')
+
+# Dictionary to store user themes if Replit DB is not available
+user_themes = {}
+
+# Try to import Replit DB, but handle the case when it's not available
+try:
+    from replit import db
+    db_available = True
+    print("Replit DB initialized successfully")
+except Exception as e:
+    db_available = False
+    print(f"Warning: Replit DB not available: {e}. Using in-memory storage instead.")
 
 @client.event
 async def on_ready():
@@ -50,10 +65,28 @@ async def help(ctx):
 
 @client.command(aliases=['r'])
 async def render(ctx, *, arg):
-  if (ctx.message.author.mention + "#" + str(ctx.message.author.id)) in db.keys():
-    await ctx.message.reply('https://mermaid.ink/img/' + base64.b64encode(json.dumps({ 'mermaid': {'theme': db[ctx.message.author.mention + "#" + str(ctx.message.author.id)]}, 'code': arg }).encode('ascii')).decode('ascii') + ("?bgColor=333" if db[ctx.message.author.mention + "#" + str(ctx.message.author.id)] == 'dark' else ""))
-  else:
-    await ctx.message.reply('https://mermaid.ink/img/' + base64.b64encode(arg.encode('ascii')).decode('ascii'))
+    user_key = ctx.message.author.mention + "#" + str(ctx.message.author.id)
+    
+    # Check if user has a theme set
+    user_theme = None
+    
+    if db_available:
+        # Try to use Replit DB if available
+        try:
+            if user_key in db.keys():
+                user_theme = db[user_key]
+        except Exception as e:
+            print(f"Error accessing Replit DB: {e}")
+    else:
+        # Use in-memory dictionary if Replit DB is not available
+        if user_key in user_themes:
+            user_theme = user_themes[user_key]
+    
+    # Generate the Mermaid diagram URL
+    if user_theme:
+        await ctx.message.reply('https://mermaid.ink/img/' + base64.b64encode(json.dumps({ 'mermaid': {'theme': user_theme}, 'code': arg }).encode('ascii')).decode('ascii') + ("?bgColor=333" if user_theme == 'dark' else ""))
+    else:
+        await ctx.message.reply('https://mermaid.ink/img/' + base64.b64encode(arg.encode('ascii')).decode('ascii'))
 
 @client.command()
 async def invite(ctx):
@@ -65,18 +98,46 @@ async def support(ctx):
 
 @client.command()
 async def setTheme(ctx, theme = ''):
-  if not(theme):
-    await ctx.message.reply("A theme must be specified for this command to work")
-  else:
-    db[ctx.message.author.mention + "#" + str(ctx.message.author.id)] = theme
-    await ctx.message.reply("Theme successfully set to " + theme)
+    if not(theme):
+        await ctx.message.reply("A theme must be specified for this command to work")
+    else:
+        user_key = ctx.message.author.mention + "#" + str(ctx.message.author.id)
+        
+        if db_available:
+            # Try to use Replit DB if available
+            try:
+                db[user_key] = theme
+            except Exception as e:
+                print(f"Error writing to Replit DB: {e}")
+                # Fallback to in-memory storage
+                user_themes[user_key] = theme
+        else:
+            # Use in-memory dictionary if Replit DB is not available
+            user_themes[user_key] = theme
+            
+        await ctx.message.reply("Theme successfully set to " + theme)
 
 @client.command()
 async def getTheme(ctx):
-  if (ctx.message.author.mention + "#" + str(ctx.message.author.id)) in db.keys():
-    await ctx.message.reply(db[ctx.message.author.mention + "#" + str(ctx.message.author.id)])
-  else:
-    await ctx.message.reply("default")
+    user_key = ctx.message.author.mention + "#" + str(ctx.message.author.id)
+    theme = "default"
+    
+    if db_available:
+        # Try to use Replit DB if available
+        try:
+            if user_key in db.keys():
+                theme = db[user_key]
+        except Exception as e:
+            print(f"Error reading from Replit DB: {e}")
+            # Fallback to in-memory storage
+            if user_key in user_themes:
+                theme = user_themes[user_key]
+    else:
+        # Use in-memory dictionary if Replit DB is not available
+        if user_key in user_themes:
+            theme = user_themes[user_key]
+    
+    await ctx.message.reply(theme)
 
 @client.command()
 async def setStatus(ctx,arg='Online'):
